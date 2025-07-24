@@ -11,6 +11,7 @@ mod resource_inner;
 mod utils;
 
 use anyhow::{anyhow, Result};
+use cgroups_rs::manager::is_systemd_cgroup;
 use hypervisor::HYPERVISOR_DRAGONBALL;
 use kata_sys_util::spec::load_oci_spec;
 use kata_types::config::TomlConfig;
@@ -32,7 +33,6 @@ pub struct CgroupConfig {
 
 impl CgroupConfig {
     fn new(sid: &str, toml_config: &TomlConfig) -> Result<Self> {
-        let overhead_path = utils::gen_overhead_path(sid);
         let path = if let Ok(spec) = load_oci_spec() {
             spec.linux()
                 .clone()
@@ -48,6 +48,8 @@ impl CgroupConfig {
         } else {
             format!("{}/{}", SANDBOXED_CGROUP_PATH, sid)
         };
+
+        let overhead_path = utils::gen_overhead_path(is_systemd_cgroup(&path), sid);
 
         // Dragonball and runtime are the same process, so that the
         // sandbox_cgroup_only is overwriten to true.

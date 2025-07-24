@@ -43,6 +43,13 @@ impl CgroupsResourceInner {
 
         let overhead_cgroup = if config.sandbox_cgroup_only {
             None
+        } else if use_systemd {
+            let mut manager = SystemdManager::new(&config.overhead_path)
+                .context("new systemd manager for overhead")?;
+            manager
+                .set_term_timeout(300)
+                .context("set term timeout for overhead")?;
+            Some(Box::new(manager) as Box<dyn Manager>)
         } else {
             // The overhead cgroup always use fs manager
             let manager =
@@ -128,6 +135,7 @@ impl CgroupsResourceInner {
         let hv_pids = hypervisor.get_thread_ids().await?;
         let mut pids = hv_pids.vcpus.values();
 
+        // Use threaded mode only in cgroup v1 + cgroupfs
         if !self.sandbox_cgroup.systemd() && !self.sandbox_cgroup.v2() {
             for pid in pids {
                 let pid = CgroupPid::from(*pid as u64);
@@ -136,7 +144,7 @@ impl CgroupsResourceInner {
                     .with_context(|| format!("add vcpu pid {}", pid.pid))?
             }
         } else {
-            // no vCPU, exits early
+            // No vCPU, exits early
             let vcpu = match pids.next() {
                 Some(pid) => *pid,
                 None => return Ok(0),

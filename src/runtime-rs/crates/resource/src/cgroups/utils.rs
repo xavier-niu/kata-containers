@@ -13,8 +13,12 @@ use anyhow::{anyhow, Context, Result};
 // on a cgroup v1 system, the Kata overhead memory cgroup will be at
 // /sys/fs/cgroup/memory/kata_overhead/$CGPATH where $CGPATH is
 // defined by the orchestrator.
-pub(crate) fn gen_overhead_path(path: &str) -> String {
-    format!("kata_overhead/{}", path.trim_start_matches('/'))
+pub(crate) fn gen_overhead_path(systemd: bool, path: &str) -> String {
+    if systemd {
+        format!("kata-overhead.slice::{}", path)
+    } else {
+        format!("kata_overhead/{}", path.trim_start_matches('/'))
+    }
 }
 
 /// Get the thread group ID (TGID) from `/proc/{pid}/status`.
