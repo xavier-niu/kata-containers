@@ -1020,7 +1020,14 @@ impl CloudHypervisorInner {
             .await
             .context("get vminfo")?;
 
-        let current_mem_size = vminfo.config.memory.size;
+        // Restored VMs use user-defined memory regions. For those VMs,
+        // `config.memory.size` does not describe the live guest RAM and can
+        // make an unchanged resource request look like memory hotplug, which
+        // Cloud Hypervisor rejects for user-defined regions. The API's
+        // `memory_actual_size` covers both cold-booted and restored VMs.
+        let current_mem_size = vminfo
+            .memory_actual_size
+            .unwrap_or(vminfo.config.memory.size);
         let new_total_mem = megs_to_bytes(new_mem_mb);
 
         info!(
