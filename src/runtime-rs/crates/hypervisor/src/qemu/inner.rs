@@ -584,10 +584,13 @@ impl QemuInner {
             Err(e) => return Err(e),
         }
 
-        // Overall timeout for migration.
-        // Regarding why the timeout is set to 280ms and whether it should be adjusted, we need more empirical data.
-        // For now, we will keep using the previous configuration.
-        let timeout = Duration::from_millis(280);
+        // QEMU template save and restore use migration even when guest memory
+        // is shared and excluded from the stream. Newer QEMU versions can
+        // still need more than the historical 280 ms limit to quiesce devices
+        // and complete the migration state transition. This is only a failure
+        // ceiling: successful migrations return as soon as QMP reports them
+        // complete.
+        let timeout = Duration::from_secs(10);
 
         // Polling interval: start small, then back off to reduce load.
         let poll_interval = Duration::from_millis(20);
@@ -741,7 +744,19 @@ impl QemuInner {
             self.id.as_str(),
         ]
         .join("/");
-        vm_cleanup(&self.config, vm_path.as_str())
+        let vm_cleanup_result = vm_cleanup(&self.config, vm_path.as_str());
+
+        let qmp_socket_path = get_qmp_socket_path(self.id.as_str());
+        let qmp_cleanup_result = match fs::remove_file(&qmp_socket_path) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(error) => {
+                Err(error).with_context(|| format!("failed to remove QMP socket {qmp_socket_path}"))
+            }
+        };
+
+        vm_cleanup_result?;
+        qmp_cleanup_result
     }
 
     pub(crate) async fn resize_vcpu(

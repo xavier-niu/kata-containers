@@ -2982,6 +2982,18 @@ pub struct QemuCmdLine<'a> {
 
 impl<'a> QemuCmdLine<'a> {
     pub fn new(id: &str, config: &'a HypervisorConfig) -> Result<QemuCmdLine<'a>> {
+        let uses_vm_template =
+            config.vm_template.boot_to_be_template || config.vm_template.boot_from_template;
+        if uses_vm_template {
+            if let Some(shared_fs @ ("virtio-fs" | "inline-virtio-fs" | "virtio-fs-nydus")) =
+                config.shared_fs.shared_fs.as_deref()
+            {
+                return Err(anyhow!(
+                    "QEMU VM templates do not support shared filesystem {shared_fs}"
+                ));
+            }
+        }
+
         let ccw_subchannel = match bus_type() {
             VirtioBusType::Ccw => Some(CcwSubChannel::new()),
             _ => None,
@@ -3004,9 +3016,24 @@ impl<'a> QemuCmdLine<'a> {
             requires_memlock: false,
         };
 
+        // VM templates use the template memory file directly. The template VM
+        // shares writes into that file; restored VMs map it privately so guest
+        // writes use copy-on-write. This mirrors the Go runtime's
+        // setupTemplate() behavior and allows migration to exclude guest RAM.
+        if uses_vm_template {
+            if config.vm_template.memory_path.is_empty() {
+                return Err(anyhow!("missing VM template memory path"));
+            }
+            qemu_cmd_line.add_file_memory_backend(
+                "entire-guest-memory",
+                &config.vm_template.memory_path,
+                config.vm_template.boot_to_be_template,
+                false,
+                config.memory_info.enable_mem_prealloc,
+            );
         // add_virtiofs_share() installs the file-backed memory backend when
         // filesystem sharing is enabled.
-        if matches!(config.shared_fs.shared_fs.as_deref(), None | Some("none")) {
+        } else if matches!(config.shared_fs.shared_fs.as_deref(), None | Some("none")) {
             qemu_cmd_line.add_ram_memory_backend(config.memory_info.enable_mem_prealloc);
         }
 
@@ -4084,6 +4111,64 @@ mod tests {
             args[0] == "-machine"
                 && contains_param(&args[1..2], "memory-backend=entire-guest-memory")
         }));
+    }
+
+    #[actix_rt::test]
+    #[serial]
+    async fn test_qemu_template_creation_uses_shared_file_backed_memory() {
+        let mut config = test_qemu_config(None, false);
+        config.vm_template.boot_to_be_template = true;
+        config.vm_template.memory_path = "/tmp/template-memory".to_owned();
+
+        let params = build_test_cmdline("template-create", &config).await;
+
+        assert!(has_qemu_arg(
+            &params,
+            "-object",
+            "memory-backend-file,id=entire-guest-memory,mem-path=/tmp/template-memory,\
+             size=2G,share=on,prealloc=off,readonly=off"
+        ));
+    }
+
+    #[actix_rt::test]
+    #[serial]
+    async fn test_qemu_template_restore_uses_private_file_backed_memory() {
+        let mut config = test_qemu_config(None, false);
+        config.vm_template.boot_from_template = true;
+        config.vm_template.memory_path = "/tmp/template-memory".to_owned();
+
+        let params = build_test_cmdline("template-restore", &config).await;
+
+        assert!(has_qemu_arg(
+            &params,
+            "-object",
+            "memory-backend-file,id=entire-guest-memory,mem-path=/tmp/template-memory,\
+             size=2G,share=off,prealloc=off,readonly=off"
+        ));
+    }
+
+    #[rstest]
+    #[case("virtio-fs")]
+    #[case("inline-virtio-fs")]
+    #[case("virtio-fs-nydus")]
+    fn test_qemu_template_rejects_virtiofs(#[case] shared_fs: &str) {
+        for (boot_to_be_template, boot_from_template) in [(true, false), (false, true)] {
+            let mut config = test_qemu_config(Some(shared_fs), false);
+            config.vm_template.boot_to_be_template = boot_to_be_template;
+            config.vm_template.boot_from_template = boot_from_template;
+            config.vm_template.memory_path = "/tmp/template-memory".to_owned();
+
+            let result = QemuCmdLine::new("template-with-virtiofs", &config);
+            let err = match result {
+                Ok(_) => panic!("QEMU template unexpectedly accepted {}", shared_fs),
+                Err(err) => err,
+            };
+
+            assert_eq!(
+                err.to_string(),
+                format!("QEMU VM templates do not support shared filesystem {shared_fs}")
+            );
+        }
     }
 
     #[actix_rt::test]
