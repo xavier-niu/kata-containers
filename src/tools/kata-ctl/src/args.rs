@@ -110,8 +110,27 @@ pub enum CheckSubCommand {
 
 #[derive(Parser, Debug)]
 pub struct FactoryArgs {
+    /// Kata runtime configuration to use instead of the default configuration
+    #[arg(short, long)]
+    pub config: Option<PathBuf>,
+
     #[command(subcommand)]
     pub command: FactorySubCommand,
+}
+
+#[derive(Debug, Args)]
+pub struct FactoryBenchmarkArgs {
+    /// Number of measured VM boots
+    #[arg(short = 'n', long, default_value_t = 10)]
+    pub iterations: usize,
+
+    /// Number of unmeasured VM boots before measurement
+    #[arg(short = 'w', long, default_value_t = 1)]
+    pub warmups: usize,
+
+    /// Measure a cold VM boot instead of template restore
+    #[arg(long)]
+    pub cold: bool,
 }
 
 #[derive(Subcommand, Debug)]
@@ -124,6 +143,9 @@ pub enum FactorySubCommand {
 
     /// Query the status of VM factory
     Status,
+
+    /// Benchmark VM boot through guest-agent readiness
+    Benchmark(FactoryBenchmarkArgs),
 }
 
 #[derive(Debug, Args)]

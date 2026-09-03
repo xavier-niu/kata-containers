@@ -162,7 +162,7 @@ impl Template {
     }
 
     /// Configures the VM configuration for template operations.
-    fn prepare_vm_config(&self, boot_to_be_template: bool) -> VmConfig {
+    pub(crate) fn prepare_vm_config(&self, boot_to_be_template: bool) -> VmConfig {
         let mut config = self.config.clone();
         config.hypervisor_config.vm_template.boot_to_be_template = boot_to_be_template;
         config.hypervisor_config.vm_template.boot_from_template = !boot_to_be_template;

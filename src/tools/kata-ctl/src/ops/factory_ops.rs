@@ -12,21 +12,32 @@ use crate::args::{FactoryArgs, FactorySubCommand};
 pub fn handle_factory(factory_args: FactoryArgs) -> Result<()> {
     let rt = Runtime::new().context("failed to create Tokio runtime")?;
     rt.block_on(async {
+        let config = factory_args.config.as_deref();
         match &factory_args.command {
             FactorySubCommand::Init => {
-                factory::init_factory_command()
+                factory::init_factory_command(config)
                     .await
                     .context("failed to initialize factory")?;
             }
             FactorySubCommand::Destroy => {
-                factory::destroy_factory_command()
+                factory::destroy_factory_command(config)
                     .await
                     .context("failed to destroy factory")?;
             }
             FactorySubCommand::Status => {
-                factory::status_factory_command()
+                factory::status_factory_command(config)
                     .await
                     .context("failed to query factory status")?;
+            }
+            FactorySubCommand::Benchmark(args) => {
+                factory::benchmark_factory_command(
+                    config,
+                    args.iterations,
+                    args.warmups,
+                    args.cold,
+                )
+                .await
+                .context("failed to benchmark factory")?;
             }
         }
         Ok(())

@@ -62,5 +62,36 @@ and purge it by calling
 $ sudo kata-runtime factory destroy
 ```
 
+The Rust runtime can initialize and benchmark a factory with `kata-ctl`. The
+benchmark uses the same boundary for Dragonball, QEMU, and Cloud Hypervisor:
+starting a VM and connecting to its guest agent. Configuration parsing and VM
+teardown are outside the measured interval.
+
+```bash
+config=/etc/kata-containers/runtime-rs/configuration.toml
+
+sudo kata-ctl factory --config "$config" init
+sudo kata-ctl factory --config "$config" benchmark --iterations 10
+sudo kata-ctl factory --config "$config" benchmark --iterations 10 --cold
+sudo kata-ctl factory --config "$config" destroy
+```
+
+The command prints each trial followed by mean, median, and p95 values. Use a
+separate factory configuration and template directory for each hypervisor.
+Keep the guest kernel, agent, vCPU count, memory size, logging level, and host
+conditions the same when comparing hypervisors. QEMU templating requires an
+initrd instead of an image. QEMU and Cloud Hypervisor templating must also be
+configured without a shared filesystem; a container workload on top of those
+VMs therefore requires a block-capable snapshotter such as EROFS or blockfile.
+
+Use `--log-level error` for performance measurements because verbose logging
+can materially change short boot times. For diagnosis, run one iteration at
+`info` level and inspect the `factory VM ready` phase timings; Dragonball also
+prints `VM restored from snapshot` timings for its internal restore phases.
+For a cross-component timeline, enable the runtime's OpenTelemetry support as
+described in [Tracing Kata Containers](../tracing.md). For host CPU attribution,
+record a longer benchmark with `perf record -g` and inspect it with
+`perf report`.
+
 If you do not want to call `kata-runtime factory init` by hand,
 the very first Kata container you create will automatically create a VM templating.
