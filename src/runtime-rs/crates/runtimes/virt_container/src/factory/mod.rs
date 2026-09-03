@@ -79,11 +79,7 @@ pub async fn init_factory_command() -> Result<()> {
 }
 
 pub async fn destroy_factory_command() -> Result<()> {
-    let (toml_config, mut factory_config) = load_and_validate_factory_config()?;
-
-    new_factory(&mut factory_config, toml_config, true)
-        .await
-        .context("new factory")?;
+    let (_, mut factory_config) = load_and_validate_factory_config()?;
 
     close_factory(&mut factory_config).context(" close VM factory")?;
 
