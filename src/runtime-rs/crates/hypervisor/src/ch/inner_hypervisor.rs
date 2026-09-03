@@ -52,7 +52,7 @@ use tokio::process::{Child, Command};
 use tokio::sync::watch::Receiver;
 use tokio::task;
 use tokio::task::JoinHandle;
-use tokio::time::Duration;
+use tokio::time::{Duration, Instant};
 use tokio::{io::AsyncBufReadExt, sync::mpsc};
 
 const CH_NAME: &str = "clh";
@@ -98,8 +98,9 @@ pub enum GuestProtectionError {
 }
 
 impl CloudHypervisorInner {
-    async fn start_hypervisor(&mut self, timeout_secs: i32) -> Result<()> {
-        self.cloud_hypervisor_launch(timeout_secs)
+    async fn start_hypervisor(&mut self, timeout_secs: i32) -> Result<Instant> {
+        let vmm_start = self
+            .cloud_hypervisor_launch(timeout_secs)
             .await
             .context("launch failed")?;
 
@@ -119,7 +120,7 @@ impl CloudHypervisorInner {
             }
         }
 
-        Ok(())
+        Ok(vmm_start)
     }
 
     async fn get_kernel_params(&self) -> Result<String> {
@@ -471,7 +472,7 @@ impl CloudHypervisorInner {
         Ok(())
     }
 
-    async fn cloud_hypervisor_launch(&mut self, _timeout_secs: i32) -> Result<()> {
+    async fn cloud_hypervisor_launch(&mut self, _timeout_secs: i32) -> Result<Instant> {
         self.cloud_hypervisor_ensure_not_launched().await?;
 
         let cfg = &self.config;
@@ -564,6 +565,7 @@ impl CloudHypervisorInner {
 
         debug!(sl!(), "launching {} as: {:?}", CH_NAME, cmd);
 
+        let vmm_start = Instant::now();
         let child = cmd.spawn().context(format!("{CH_NAME} spawn failed"))?;
 
         // Save process PID
@@ -588,7 +590,7 @@ impl CloudHypervisorInner {
 
         self.tasks = Some(tasks);
 
-        Ok(())
+        Ok(vmm_start)
     }
 
     async fn cloud_hypervisor_shutdown(&mut self) -> Result<()> {
@@ -791,7 +793,7 @@ impl CloudHypervisorInner {
 
     pub(crate) async fn start_vm(&mut self, timeout_secs: i32) -> Result<()> {
         self.timeout_secs = timeout_secs;
-        self.start_hypervisor(self.timeout_secs).await?;
+        let vmm_start = self.start_hypervisor(self.timeout_secs).await?;
 
         self.state = VmmState::VmmServerReady;
 
@@ -799,6 +801,12 @@ impl CloudHypervisorInner {
             self.prepare_restore_files()?;
             self.restore_vm().await?;
             self.resume_vm().await?;
+            info!(
+                sl!(),
+                "KATA_TEMPLATE_START hypervisor=cloud-hypervisor sandbox_id={} elapsed_us={}",
+                self.id,
+                vmm_start.elapsed().as_micros(),
+            );
         } else {
             if self.config.vm_template.boot_from_template {
                 self.config.vm_template.boot_from_template = false;

@@ -6,6 +6,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::iter::FromIterator;
+use std::time::Instant;
 
 use anyhow::{anyhow, Context, Ok, Result};
 use dragonball::ALL_THREADS;
@@ -52,6 +53,7 @@ impl DragonballInner {
     // start_vm will start the hypervisor for the given sandbox.
     // In the context of dragonball, this will start the hypervisor
     pub(crate) async fn start_vm(&mut self, timeout: i32) -> Result<()> {
+        let vmm_start = Instant::now();
         self.run_vmm_server().context("start vmm server")?;
         self.cold_start_vm(timeout).await.map_err(|error| {
             error!(sl!(), "start micro vm error {:?}", error);
@@ -60,6 +62,14 @@ impl DragonballInner {
             }
             error
         })?;
+        if self.config.vm_template.boot_from_template {
+            info!(
+                sl!(),
+                "KATA_TEMPLATE_START hypervisor=dragonball sandbox_id={} elapsed_us={}",
+                self.id,
+                vmm_start.elapsed().as_micros(),
+            );
+        }
 
         Ok(())
     }

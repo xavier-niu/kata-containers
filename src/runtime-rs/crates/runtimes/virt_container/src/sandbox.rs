@@ -1219,6 +1219,7 @@ impl Sandbox for VirtSandbox {
     ///
     /// This function is responsible for creating and starting a VM sandbox from a predefined template,
     /// serving as the core implementation of the template mechanism.
+    #[instrument(name = "sb: start template", skip(self), fields(sandbox_id = %self.sid))]
     async fn start_template(&self) -> Result<()> {
         info!(sl!(), "sandbox::start_template()"; "sandbox:" => format!("{:?}", self));
         let id = &self.sid;

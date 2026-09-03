@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, sync::Arc, time::Instant};
 
 use agent::{kata::KataAgent, Agent, AgentManager, AGENT_KATA};
 use anyhow::{anyhow, Context, Result};
@@ -20,6 +20,7 @@ use resource::{cpu_mem::initial_size::InitialSizeManager, ResourceManager};
 use runtime_spec;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::channel;
+use tracing::instrument;
 use uuid::Uuid;
 
 use crate::sandbox::VirtSandbox;
@@ -263,19 +264,26 @@ impl TemplateVm {
     }
 
     /// Creates a new VM based on the provided configuration.
+    #[instrument(skip(config, toml_config), fields(hypervisor = %config.hypervisor_name))]
     pub async fn new_vm(config: VmConfig, toml_config: TomlConfig) -> Result<Self> {
+        let vm_start = Instant::now();
         let sid = Uuid::new_v4().to_string();
 
         let (sender, _receiver) = channel::<Message>(MESSAGE_BUFFER_SIZE);
 
+        let mut phase_start = Instant::now();
         let hypervisor = Self::new_hypervisor(&config, &toml_config)
             .await
             .context("new hypervisor")?;
+        let new_hypervisor_us = phase_start.elapsed().as_micros() as u64;
 
+        phase_start = Instant::now();
         let agent = Self::new_agent(&config).context("new agent")?;
+        let new_agent_us = phase_start.elapsed().as_micros() as u64;
 
         let sandbox_config = Self::new_empty_sandbox_config();
 
+        phase_start = Instant::now();
         let initial_size_manager = InitialSizeManager::new_from(&sandbox_config.annotations)
             .context("failed to construct static resource manager")?;
 
@@ -300,7 +308,9 @@ impl TemplateVm {
             .await
             .context("build resource manager")?,
         );
+        let resource_manager_us = phase_start.elapsed().as_micros() as u64;
 
+        phase_start = Instant::now();
         let sandbox = VirtSandbox::new(
             &sid,
             sender.clone(),
@@ -312,7 +322,9 @@ impl TemplateVm {
         )
         .await
         .context("build sandbox")?;
+        let sandbox_build_us = phase_start.elapsed().as_micros() as u64;
 
+        phase_start = Instant::now();
         if let Err(start_error) = sandbox.start_template().await {
             if let Err(teardown_error) = Self::teardown_sandbox(&sandbox).await {
                 warn!(
@@ -322,6 +334,7 @@ impl TemplateVm {
             }
             return Err(start_error).context("start template");
         }
+        let sandbox_start_us = phase_start.elapsed().as_micros() as u64;
         info!(sl!(), "template VM has been started");
 
         let hypervisor_config = sandbox.get_hypervisor().hypervisor_config().await;
@@ -332,14 +345,34 @@ impl TemplateVm {
         );
 
         let readiness_result: Result<()> = async {
+            phase_start = Instant::now();
             let address = hypervisor
                 .get_agent_socket()
                 .await
                 .context("get template VM agent socket")?;
+            let agent_socket_us = phase_start.elapsed().as_micros() as u64;
+            phase_start = Instant::now();
             agent
                 .start(&address)
                 .await
-                .context("connect to template VM agent")
+                .context("connect to template VM agent")?;
+            let agent_connect_us = phase_start.elapsed().as_micros() as u64;
+
+            info!(
+                sl!(),
+                "factory VM ready: total_us={}, new_hypervisor_us={}, new_agent_us={}, \
+                 resource_manager_us={}, sandbox_build_us={}, sandbox_start_us={}, \
+                 agent_socket_us={}, agent_connect_us={}",
+                vm_start.elapsed().as_micros() as u64,
+                new_hypervisor_us,
+                new_agent_us,
+                resource_manager_us,
+                sandbox_build_us,
+                sandbox_start_us,
+                agent_socket_us,
+                agent_connect_us,
+            );
+            Ok(())
         }
         .await;
 

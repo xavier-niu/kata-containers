@@ -9,6 +9,8 @@ use std::os::unix::io::AsRawFd;
 use std::os::unix::io::RawFd;
 
 use std::sync::{Arc, Mutex, RwLock};
+#[cfg(target_arch = "x86_64")]
+use std::time::Instant;
 
 use dbs_address_space::AddressSpace;
 #[cfg(target_arch = "aarch64")]
@@ -922,6 +924,7 @@ impl Vm {
         state_path: &std::path::Path,
         mem_path: &std::path::Path,
     ) -> std::result::Result<(), StartMicroVmError> {
+        let restore_start = Instant::now();
         info!(self.logger, "VM: received restore-from-snapshot command");
 
         if let Some(process_seccomp_filter) = seccomp_filters.get(ALL_THREADS) {
@@ -952,7 +955,9 @@ impl Vm {
             .expect("Failed to start microVM because shared info couldn't be written due to poisoned lock")
             .state = InstanceState::Starting;
 
+        let mut phase_start = Instant::now();
         self.init_guest_memory()?;
+        let guest_memory_us = phase_start.elapsed().as_micros() as u64;
         let vm_as = self
             .vm_as()
             .cloned()
@@ -960,6 +965,7 @@ impl Vm {
                 AddressManagerError::GuestMemoryNotInitialized,
             ))?;
 
+        phase_start = Instant::now();
         self.init_vcpu_manager(
             vm_as.clone(),
             seccomp_filters
@@ -968,25 +974,37 @@ impl Vm {
                 .unwrap_or_default(),
         )
         .map_err(StartMicroVmError::Vcpu)?;
+        let vcpu_manager_us = phase_start.elapsed().as_micros() as u64;
+
         // Recreate host-side devices and fresh vCPU objects without requiring
         // a boot source. The snapshot supplies guest memory, the finalized
         // kernel command line and all vCPU state before execution resumes.
+        phase_start = Instant::now();
         self.init_microvm_from_snapshot(event_mgr.epoll_manager(), vm_as.clone(), request_ts)?;
+        let microvm_init_us = phase_start.elapsed().as_micros() as u64;
+        phase_start = Instant::now();
         #[cfg(feature = "dbs-upcall")]
         self.init_upcall()?;
+        let upcall_us = phase_start.elapsed().as_micros() as u64;
 
         info!(self.logger, "VM: restoring snapshot state");
+        phase_start = Instant::now();
         self.restore_microvm(state_path, mem_path)
             .map_err(|e| StartMicroVmError::RestoreMicroVm(e.to_string()))?;
+        let state_restore_us = phase_start.elapsed().as_micros() as u64;
 
         info!(self.logger, "VM: register events");
+        phase_start = Instant::now();
         self.register_events(event_mgr)?;
+        let register_events_us = phase_start.elapsed().as_micros() as u64;
 
         info!(self.logger, "VM: start vcpus");
+        phase_start = Instant::now();
         self.vcpu_manager()
             .map_err(StartMicroVmError::Vcpu)?
             .start_boot_vcpus(seccomp_filters.get(VMM_THREAD).cloned().unwrap_or_default())
             .map_err(StartMicroVmError::Vcpu)?;
+        let start_vcpus_us = phase_start.elapsed().as_micros() as u64;
 
         // Use expect() to crash if the other thread poisoned this lock.
         self.shared_info
@@ -994,7 +1012,20 @@ impl Vm {
             .expect("Failed to start microVM because shared info couldn't be written due to poisoned lock")
             .state = InstanceState::Running;
 
-        info!(self.logger, "VM restored from snapshot");
+        info!(
+            self.logger,
+            "VM restored from snapshot: total_us={}, guest_memory_us={}, \
+             vcpu_manager_us={}, microvm_init_us={}, upcall_us={}, \
+             state_restore_us={}, register_events_us={}, start_vcpus_us={}",
+            restore_start.elapsed().as_micros() as u64,
+            guest_memory_us,
+            vcpu_manager_us,
+            microvm_init_us,
+            upcall_us,
+            state_restore_us,
+            register_events_us,
+            start_vcpus_us,
+        );
         Ok(())
     }
 }

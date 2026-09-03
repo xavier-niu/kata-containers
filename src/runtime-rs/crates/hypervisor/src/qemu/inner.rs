@@ -445,6 +445,7 @@ impl QemuInner {
             });
         }
 
+        let vmm_start = Instant::now();
         let mut qemu_process = command.stderr(Stdio::piped()).spawn()?;
         // QEMU inherited its startup descriptors during spawn. Drop the
         // privileged shim's copies immediately; QEMU owns the fdsets from here.
@@ -524,6 +525,12 @@ impl QemuInner {
                 .await
                 .context("boot from template")?;
             self.resume_vm().context("resume vm")?;
+            info!(
+                sl!(),
+                "KATA_TEMPLATE_START hypervisor=qemu sandbox_id={} elapsed_us={}",
+                self.id,
+                vmm_start.elapsed().as_micros(),
+            );
         }
 
         Ok(())
